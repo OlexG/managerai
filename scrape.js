@@ -1,33 +1,23 @@
-// scrape.ts
+// scrape.js
 
 // Load environment variables from .env file
-import dotenv from 'dotenv';
+const dotenv = require('dotenv');
 dotenv.config();
 
-import { createClient } from '@supabase/supabase-js';
-import { Octokit } from '@octokit/rest';
+const { createClient } = require('@supabase/supabase-js');
 
-// Define TypeScript interfaces for our output data.
-interface CommitData {
-  author: string;
-  diff: string;
-}
-
-interface RepoData {
-  name: string;
-  link: string;
-  stars: number;
-  top50contributors: string[];
-  commits: CommitData[];
-}
-
-// Retrieve Supabase credentials from environment variables
+// Retrieve credentials from environment variables
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
 if (!SUPABASE_URL || !SUPABASE_KEY) {
   console.error('Error: Missing Supabase credentials. Please check your .env file.');
+  process.exit(1);
+}
+if (!OPENAI_API_KEY) {
+  console.error('Error: Missing OpenAI API key. Please check your .env file.');
   process.exit(1);
 }
 
@@ -35,11 +25,44 @@ if (!SUPABASE_URL || !SUPABASE_KEY) {
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 /**
- * Main function to process scraping for a given company ID.
- * @param companyId - The identifier for the company to scrape.
+ * Summarize the scraped GitHub data by selecting the top repository (by stars)
+ * and including the diffs from its 3 most recent commits.
+ * @param {Array} scrapedData - Array of repository objects.
+ * @returns {string} A summary string.
  */
-async function main(companyId: string): Promise<void> {
+function summarizeScrapedData(scrapedData) {
+  if (!scrapedData || !Array.isArray(scrapedData) || scrapedData.length === 0) {
+    return 'No repository data available.';
+  }
+  
+  // Sort repositories by stars descending and choose the top one.
+  const sortedRepos = scrapedData.sort((a, b) => b.stars - a.stars);
+  const topRepo = sortedRepos[0];
+  
+  let summary = `Top Repository:\n`;
+  summary += `Name: ${topRepo.name}\nStars: ${topRepo.stars}\nLink: ${topRepo.link}\n\n`;
+  
+  if (topRepo.commits && topRepo.commits.length > 0) {
+    summary += `Top 3 Recent Commits:\n`;
+    const commitsToInclude = topRepo.commits.slice(0, 3);
+    commitsToInclude.forEach((commit, index) => {
+      // Truncate diff for brevity (adjust length as needed)
+      const diffExcerpt = commit.diff.slice(0, 200).replace(/\n/g, ' ');
+      summary += `Commit ${index + 1} by ${commit.author}:\n${diffExcerpt}...\n\n`;
+    });
+  }
+  return summary;
+}
+
+/**
+ * Main function to process scraping for a given company ID.
+ * @param {string} companyId - The identifier for the company to scrape.
+ */
+async function main(companyId) {
   try {
+    // Dynamically import Octokit (since it's an ES module)
+    const { Octokit } = await import('@octokit/rest');
+
     // Fetch company data from Supabase
     const { data, error } = await supabase
       .from('data')
@@ -47,17 +70,21 @@ async function main(companyId: string): Promise<void> {
       .eq('id', parseInt(companyId))
       .single();
 
+    console.log("Help");
+    console.log(data, error);
     if (error) {
       console.error('Error fetching company data:', error);
       return;
     }
+    if (!data) {
+      console.error('No company data found.');
+      return;
+    }
 
-    // Get the website URL (expected to be a GitHub org URL, e.g., https://github.com/PostHog)
-    const website: string = data.website;
+    // Parse the website URL to extract the GitHub organization name.
+    const website = data.website;
     console.log(`Company website: ${website}`);
-
-    // Parse the GitHub organization name from the website URL.
-    let orgName: string;
+    let orgName;
     try {
       const url = new URL(website);
       const pathParts = url.pathname.split('/').filter(Boolean);
@@ -71,7 +98,7 @@ async function main(companyId: string): Promise<void> {
     }
     console.log(`Parsed GitHub organization: ${orgName}`);
 
-    // Initialize Octokit with the optional GitHub token.
+    // Initialize Octokit with the GitHub token.
     const octokit = new Octokit({
       auth: GITHUB_TOKEN || undefined,
     });
@@ -81,25 +108,24 @@ async function main(companyId: string): Promise<void> {
     const reposResponse = await octokit.rest.repos.listForOrg({
       org: orgName,
       type: 'public',
-      per_page: 100, // adjust if needed; may require pagination for very large orgs
+      per_page: 100,
     });
     const repos = reposResponse.data;
 
-    // Sort repositories by stargazers_count in descending order.
+    // Sort repositories by stargazers_count descending and select the top 4.
     const sortedRepos = repos.sort((a, b) => b.stargazers_count - a.stargazers_count);
-    // Take the top 4 repositories.
-    const topRepos = sortedRepos.slice(0, 4);
+    const topRepos = sortedRepos.slice(0, 1);
     console.log(`Selected top ${topRepos.length} repositories for ${orgName}.`);
 
     // Create an array to hold the final data.
-    const results: RepoData[] = [];
+    const results = [];
 
     // For each top repository, gather detailed information.
     for (const repo of topRepos) {
       console.log(`\nProcessing repository: ${repo.name}`);
 
-      // Get the top 50 contributors (GitHub returns them sorted by contributions)
-      let contributors: string[] = [];
+      // Get the top 50 contributors.
+      let contributors = [];
       try {
         const contributorsResponse = await octokit.rest.repos.listContributors({
           owner: orgName,
@@ -112,7 +138,7 @@ async function main(companyId: string): Promise<void> {
       }
 
       // Get the 10 most recent commits for this repository.
-      let commitsData: CommitData[] = [];
+      let commitsData = [];
       try {
         const commitsResponse = await octokit.rest.repos.listCommits({
           owner: orgName,
@@ -121,7 +147,7 @@ async function main(companyId: string): Promise<void> {
         });
         const commitSummaries = commitsResponse.data;
 
-        // Process each commit to get its detailed diff info.
+        // Process each commit to get detailed diff info.
         for (const commitSummary of commitSummaries) {
           const commitSha = commitSummary.sha;
           try {
@@ -132,13 +158,11 @@ async function main(companyId: string): Promise<void> {
             });
             const commitDetails = commitDetailsResponse.data;
 
-            // Determine the commit author's username (or fallback to the commit author's name)
             const commitAuthor =
               commitDetails.author?.login ||
               commitDetails.commit.author?.name ||
               'Unknown';
 
-            // Aggregate the diffs from all changed files into a single diff string.
             let diffText = '';
             if (commitDetails.files && commitDetails.files.length > 0) {
               diffText = commitDetails.files
@@ -165,8 +189,7 @@ async function main(companyId: string): Promise<void> {
         console.error(`Error fetching commits for repository ${repo.name}:`, commitError);
       }
 
-      // Assemble our repository data object.
-      const repoData: RepoData = {
+      const repoData = {
         name: repo.name,
         link: repo.html_url,
         stars: repo.stargazers_count,
@@ -177,11 +200,10 @@ async function main(companyId: string): Promise<void> {
       results.push(repoData);
     }
 
-    // Now `results` contains the array of repository objects with the desired structure.
     console.log('\nFinal scraped data:');
     console.log(JSON.stringify(results, null, 2));
 
-    // Update the company's record in Supabase with the scraped data in the "scraped_data" JSONB column.
+    // Update the company's record in Supabase with the scraped data.
     const { error: updateError } = await supabase
       .from('data')
       .update({ scraped_data: results })
@@ -201,7 +223,7 @@ async function main(companyId: string): Promise<void> {
 // Retrieve the company ID from the command-line arguments.
 const companyId = process.argv[2];
 if (!companyId) {
-  console.error('Usage: ts-node scrape.ts <companyId>');
+  console.error('Usage: ts-node scrape.js <companyId>');
   process.exit(1);
 }
 
