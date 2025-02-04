@@ -6,7 +6,8 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "scrape": "node scrape.js",
-    "email": "node email.js"
+    "email": "node email.js",
+    "update-nice-data": "node updateNiceData.js"
   },
   "author": "",
   "license": "ISC",

@@ -25,8 +25,8 @@ if (!OPENAI_API_KEY) {
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 /**
- * Summarize the scraped GitHub data by selecting the top repository (by stars)
- * and including the diffs from its 3 most recent commits.
+ * Summarize the scraped GitHub data by selecting the top repository (by stars),
+ * including the diffs from its 3 most recent commits and computing average additions/deletions.
  * @param {Array} scrapedData - Array of repository objects.
  * @returns {string} A summary string.
  */
@@ -34,29 +34,42 @@ function summarizeScrapedData(scrapedData) {
   if (!scrapedData || !Array.isArray(scrapedData) || scrapedData.length === 0) {
     return 'No repository data available.';
   }
-  
+
   // Sort repositories by stars descending and choose the top one.
   const sortedRepos = scrapedData.sort((a, b) => b.stars - a.stars);
   const topRepo = sortedRepos[0];
-  
+
   let summary = `Top Repository:\n`;
   summary += `Name: ${topRepo.name}\nStars: ${topRepo.stars}\nLink: ${topRepo.link}\n\n`;
-  
+
   if (topRepo.commits && topRepo.commits.length > 0) {
     summary += `Top 3 Recent Commits:\n`;
     const commitsToInclude = topRepo.commits.slice(0, 3);
+    let totalAdditions = 0;
+    let totalDeletions = 0;
+    let countStats = 0;
     commitsToInclude.forEach((commit, index) => {
       // Truncate diff for brevity (adjust length as needed)
       const diffExcerpt = commit.diff.slice(0, 200).replace(/\n/g, ' ');
       summary += `Commit ${index + 1} by ${commit.author}:\n${diffExcerpt}...\n\n`;
+      if (commit.stats) {
+        totalAdditions += commit.stats.additions;
+        totalDeletions += commit.stats.deletions;
+        countStats++;
+      }
     });
+    if (countStats > 0) {
+      const avgAdditions = Math.round(totalAdditions / countStats);
+      const avgDeletions = Math.round(totalDeletions / countStats);
+      summary += `Average changes per commit: +${avgAdditions} lines, -${avgDeletions} lines.\n`;
+    }
   }
   return summary;
 }
 
 /**
- * Main function to process scraping for a given company ID.
- * @param {string} companyId - The identifier for the company to scrape.
+ * Main function to scrape GitHub data for a given company ID.
+ * @param {string} companyId - The identifier for the company to process.
  */
 async function main(companyId) {
   try {
@@ -112,12 +125,12 @@ async function main(companyId) {
     });
     const repos = reposResponse.data;
 
-    // Sort repositories by stargazers_count descending and select the top 4.
+    // Sort repositories by stargazers_count descending and select the top 1.
     const sortedRepos = repos.sort((a, b) => b.stargazers_count - a.stargazers_count);
     const topRepos = sortedRepos.slice(0, 1);
-    console.log(`Selected top ${topRepos.length} repositories for ${orgName}.`);
+    console.log(`Selected top ${topRepos.length} repository for ${orgName}.`);
 
-    // Create an array to hold the final data.
+    // Create an array to hold the final scraped data.
     const results = [];
 
     // For each top repository, gather detailed information.
@@ -132,7 +145,22 @@ async function main(companyId) {
           repo: repo.name,
           per_page: 50,
         });
-        contributors = contributorsResponse.data.map((contributor) => contributor.login);
+        // Instead of storing usernames, fetch each contributor's profile to get their full name.
+        const contributorProfiles = await Promise.all(
+          contributorsResponse.data.map(async (contributor) => {
+            try {
+              const userResponse = await octokit.rest.users.getByUsername({
+                username: contributor.login,
+              });
+              const fullName = userResponse.data.name;
+              return fullName ? fullName : contributor.login;
+            } catch (err) {
+              console.error(`Error fetching profile for ${contributor.login}:`, err);
+              return contributor.login;
+            }
+          })
+        );
+        contributors = contributorProfiles;
       } catch (contribError) {
         console.error(`Error fetching contributors for repository ${repo.name}:`, contribError);
       }
@@ -162,7 +190,7 @@ async function main(companyId) {
               commitDetails.author?.login ||
               commitDetails.commit.author?.name ||
               'Unknown';
-
+            const commitMessage = commitDetails.commit.message;
             let diffText = '';
             if (commitDetails.files && commitDetails.files.length > 0) {
               diffText = commitDetails.files
@@ -176,10 +204,15 @@ async function main(companyId) {
             } else {
               diffText = 'No file changes found for this commit.';
             }
+            
+            // Include commit stats if available
+            const stats = commitDetails.stats || { additions: 0, deletions: 0, total: 0 };
 
             commitsData.push({
+              message: commitMessage,
               author: commitAuthor,
               diff: diffText,
+              stats: stats
             });
           } catch (commitDetailError) {
             console.error(`Error fetching details for commit ${commitSha} in repo ${repo.name}:`, commitDetailError);
@@ -189,12 +222,29 @@ async function main(companyId) {
         console.error(`Error fetching commits for repository ${repo.name}:`, commitError);
       }
 
+      // Calculate average additions and deletions for the top 3 commits (if available)
+      let totalAdditions = 0;
+      let totalDeletions = 0;
+      let countStats = 0;
+      const top3Commits = commitsData.slice(0, 3);
+      top3Commits.forEach((commit) => {
+        if (commit.stats) {
+          totalAdditions += commit.stats.additions;
+          totalDeletions += commit.stats.deletions;
+          countStats++;
+        }
+      });
+      const averageAdditions = countStats > 0 ? Math.round(totalAdditions / countStats) : 0;
+      const averageDeletions = countStats > 0 ? Math.round(totalDeletions / countStats) : 0;
+
       const repoData = {
         name: repo.name,
         link: repo.html_url,
         stars: repo.stargazers_count,
         top50contributors: contributors,
         commits: commitsData,
+        averageAdditions,
+        averageDeletions
       };
 
       results.push(repoData);
@@ -223,7 +273,7 @@ async function main(companyId) {
 // Retrieve the company ID from the command-line arguments.
 const companyId = process.argv[2];
 if (!companyId) {
-  console.error('Usage: ts-node scrape.js <companyId>');
+  console.error('Usage: node scrape.js <companyId>');
   process.exit(1);
 }
 

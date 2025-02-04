@@ -9,7 +9,7 @@ const { createClient } = require('@supabase/supabase-js');
 // Retrieve credentials from environment variables
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
-const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
+const GITHUB_TOKEN = process.env.GITHUB_TOKEN;  // (not used in this file)
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
 if (!SUPABASE_URL || !SUPABASE_KEY) {
@@ -26,7 +26,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 /**
  * Summarize the scraped GitHub data by selecting the top repository (by stars)
- * and including the diffs from its 3 most recent commits.
+ * and including the diffs from its 3 most recent commits plus average code churn.
  * @param {Array} scrapedData - Array of repository objects.
  * @returns {string} A summary string.
  */
@@ -51,6 +51,11 @@ function summarizeScrapedData(scrapedData) {
       summary += `Commit ${index + 1} by ${commit.author}:\n${diffExcerpt}...\n\n`;
     });
   }
+  
+  if (topRepo.averageAdditions !== undefined && topRepo.averageDeletions !== undefined) {
+    summary += `Average changes per commit: +${topRepo.averageAdditions} lines, -${topRepo.averageDeletions} lines.\n`;
+  }
+  
   return summary;
 }
 
@@ -70,25 +75,26 @@ async function generateEmail(company) {
 
   // Construct a concise, personable prompt.
   const prompt = `
-You are a friendly email copywriter who transforms technical commit diffs into clear, actionable insights for nontechnical managers.
+You are a friendly email copywriter who translates technical commit diffs and code metrics into clear, actionable insights for nontechnical managers.
 
-Write a concise email with a short narrative like this, using the following template:
-"I noticed that last week your top repository, [Repo Name], received important updates - especially in key areas such as authentication and UI improvements. This shows your team is making significant progress.
+Write a concise email that tells a short story. For example, your email might say:
 
-I especially noticed:
-- [Author] is delivering standout work, demonstrating mastery in [technology].
-- Their commits indicate substantial improvements in critical features.
-- Overall, these updates are boosting product quality and stability.
+"I noticed that last week your top repository, [Repo Name], received important updates—especially in areas like authentication and UI improvements. This indicates that your team is making significant progress.
 
-All these insights are automatically generated to help managers make data-driven technical decisions. Check out odem.ai and let's schedule a call to see if our AI Assistant Manager can help your company."
+Key insights:
+- [Author 1]'s commits added impressive improvements (averaging +[avgAdditions] lines and -[avgDeletions] lines per commit).
+- [Author 2] contributed meaningful fixes that enhance stability.
+- [Author 3] made critical updates that boost overall quality.
+
+These automated insights help managers quickly understand technical progress. Check out odem.ai and let's schedule a call to see if our AI Manager Assistant can benefit your company."
 
 Now, fill in the following:
-- Company Name: ${company.company_name}
+- Company Name: ${company.name}
 - Manager Name: ${company.manager_name || '[Manager Name]'}
 - GitHub Data Summary:
 ${dataSummary}
 
-Generate an email (just the body, no subject) that replaces all placeholders with appropriate information and provides clear, engaging insights with a call to action.
+Generate a complete email (just the body, no subject) that replaces all placeholders with the appropriate information, provides clear and engaging insights, and ends with a call to action.
 `;
 
   const completionResponse = await openai.chat.completions.create({
@@ -106,10 +112,7 @@ Generate an email (just the body, no subject) that replaces all placeholders wit
  */
 async function main(companyId) {
   try {
-    // Dynamically import Octokit (since it's an ES module)
-    const { Octokit } = await import('@octokit/rest');
-
-    // Fetch company data from Supabase
+    // Fetch company data from Supabase (this script no longer makes any GitHub API calls)
     const { data, error } = await supabase
       .from('data')
       .select('*')
@@ -127,12 +130,7 @@ async function main(companyId) {
       return;
     }
 
-    // Optionally, use Octokit for additional GitHub calls if needed.
-    const octokitClient = new Octokit({
-      auth: GITHUB_TOKEN || undefined,
-    });
-
-    // Assume the scraped_data column is already populated with repository data.
+    // Log the scraped GitHub data (which now includes averageAdditions and averageDeletions, etc.)
     console.log("Scraped GitHub Data:", JSON.stringify(data.scraped_data, null, 2));
 
     // Generate the personalized email using the scraped data and company info.
@@ -140,8 +138,7 @@ async function main(companyId) {
     console.log("\n--- Generated Email ---\n");
     console.log(email);
 
-    // Optionally, update the company record with the generated email:
-    
+    // Optionally, update the company record with the generated email.
     const { error: updateError } = await supabase
       .from('data')
       .update({ email: email })
