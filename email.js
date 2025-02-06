@@ -75,21 +75,28 @@ async function generateEmail(company) {
 
   // Construct a concise, personable prompt.
   const prompt = `
-You are a friendly email copywriter who translates technical commit diffs and code metrics into clear, actionable insights for nontechnical managers.
+You are a to-the-point email copywriter who translates technical commit diffs and code metrics into clear, actionable insights for nontechnical managers.
 
 Write a concise email that tells a short story. For example, your email might say:
 
-"I noticed that last week your top repository, [Repo Name], received important updates—especially in areas like authentication and UI improvements. This indicates that your team is making significant progress.
+"Hey! 
+My name is [Name], and as part of my university project, I am working on streamlining the manager workflow process with AI. 
+
+I noticed that last week your top repository, [Repo Name], received important updates—especially in areas like authentication and UI improvements. This indicates that your team is making significant progress.
 
 Key insights:
 - [Author 1]'s commits added impressive improvements (averaging +[avgAdditions] lines and -[avgDeletions] lines per commit).
 - [Author 2] contributed meaningful fixes that enhance stability.
 - [Author 3] made critical updates that boost overall quality.
 
-These automated insights help managers quickly understand technical progress. Check out odem.ai and let's schedule a call to see if our AI Manager Assistant can benefit your company."
+These automated insights help managers quickly understand technical progress, and are a part of what I'm working on. 
+I also made a small portal for just for you at [Portal] which has a mix of real and dummy data representing your company. It is important to note that a lot of the data and insights in the portal are mocks, and a lot of functionality is not yet implemented.
+However, it is a good way to get a feel for what sort of features we can provide for you.
+If this looks interesting, let's schedule a short call to discuss. I'd love to learn more about you and how this might fit within your processes."
 
-Now, fill in the following:
+Now, fill in the following (just paste the links in as given, no parentheses / brackets):
 - Company Name: ${company.name}
+- Portal: https://odem.ai/company/${company.name}
 - Manager Name: ${company.manager_name || '[Manager Name]'}
 - GitHub Data Summary:
 ${dataSummary}
